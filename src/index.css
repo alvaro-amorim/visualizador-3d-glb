@@ -1,0 +1,213 @@
+/* C:\Users\Álvaro Amorim\app-3d-educativo\src\index.css */
+
+/* Reset básico para remover margens padrão */
+body, html {
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Evita barras de scroll desnecessárias */
+  width: 100vw;     /* 100% da largura da janela */
+  height: 100vh;    /* 100% da altura da janela */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: #282c34; /* Um fundo escuro */
+  color: #f1f1f1;
+}
+
+/* --- Layout Principal (Flexbox) --- */
+
+.container {
+  display: flex;
+  flex-direction: row; /* Organiza os filhos lado a lado */
+  width: 100%;
+  height: 100%;
+}
+
+/* --- Coluna da Esquerda (Viewer) --- */
+.viewer-column {
+  flex-grow: 1; /* Faz esta coluna ocupar todo o espaço restante */
+  height: 100%;
+  background-color: #1a1a1a; /* Fundo escuro para o viewer */
+}
+
+/* Regra para o <model-viewer> ocupar 100% da sua coluna */
+model-viewer {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* --- Coluna da Direita (Controles) --- */
+.controls-column {
+  width: 250px; /* Largura fixa para os controles */
+  flex-shrink: 0; /* Impede que a coluna encolha */
+  padding: 20px;
+  box-sizing: border-box; /* Garante que o padding não aumente a largura */
+  background-color: #20232a;
+  display: flex;
+  flex-direction: column; /* Organiza os botões em coluna */
+  gap: 15px; /* Espaço entre os botões */
+}
+
+.controls-column h2 {
+  margin-top: 0;
+  text-align: center;
+  color: white;
+}
+
+.controls-column button {
+  padding: 12px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background-color 0.2s;
+}
+
+.controls-column button:hover {
+  background-color: #0056b3;
+}
+
+/* --- Barra de Status --- */
+#status-log {
+  margin-top: auto; /* Empurra o status para o fundo da coluna */
+  padding-top: 15px;
+  border-top: 1px solid #444;
+}
+
+#status-log p {
+  margin: 0;
+  color: #ccc;
+  font-size: 14px;
+}
+
+/* --- Anotações (Hotspots) (CORRIGIDO) --- */
+
+/* Esta regra esconde as anotações por defeito 
+   E define 'position: relative' para o botão 'X' 
+*/
+[slot^="hotspot-"] {
+  display: none; 
+  position: relative; /* <<< Adicionado para o botão 'X' >>> */
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 5px;
+  font-size: 14px;
+}
+
+/* Esta regra MOSTRA as anotações 
+   Tem de vir DEPOIS da regra de cima para se sobrepor
+*/
+.annotation-visible {
+  display: block;
+}
+
+/* O próprio botão 'X' */
+.delete-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  background-color: #dc3545; /* Vermelho */
+  color: white;
+  border: none;
+  border-radius: 50%; /* Círculo */
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 18px; /* Alinha o 'X' verticalmente */
+  text-align: center;
+  padding: 0;
+  z-index: 10;
+}
+
+.delete-btn:hover {
+  background-color: #c82333; /* Vermelho mais escuro */
+}
+
+
+/* --- Modal de Anotação (Sem alterações) --- */
+
+.modal-hidden {
+  display: none !important; /* Escondido por defeito */
+}
+
+#annotation-modal-backdrop {
+  position: fixed; /* Fica por cima de tudo */
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.6); /* Fundo semi-transparente */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+}
+
+#annotation-modal {
+  background-color: #282c34;
+  padding: 25px;
+  border-radius: 8px;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  border: 1px solid #555;
+}
+
+#annotation-modal h2 {
+  margin-top: 0;
+  text-align: center;
+}
+
+#annotation-modal label {
+  margin-top: 10px;
+  margin-bottom: 5px;
+  font-weight: bold;
+}
+
+#annotation-modal input[type="text"],
+#annotation-modal textarea {
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  border: 1px solid #777;
+  background-color: #333;
+  color: white;
+  font-family: inherit;
+}
+
+#annotation-modal .modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+#annotation-modal button {
+  padding: 10px 15px;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+#modal-btn-save {
+  background-color: #007bff;
+}
+#modal-btn-save:hover {
+  background-color: #0056b3;
+}
+
+#modal-btn-cancel {
+  background-color: #6c757d;
+}
+#modal-btn-cancel:hover {
+  background-color: #5a6268;
+}
