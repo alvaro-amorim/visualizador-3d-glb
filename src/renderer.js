@@ -94,7 +94,7 @@ function initThreeJS() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping; 
     renderer.toneMappingExposure = 1.0; 
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    canvasContainer.appendChild(renderer.domElement);
+    canvasContainer.appendChild(renderer.domElement); 
 
     // 4.1.3. Configuração do PMREM Generator e Controlos
     pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -106,14 +106,14 @@ function initThreeJS() {
     controls.dampingFactor = 0.15; 
     controls.rotateSpeed = 0.25; 
     
-    // <<< TROCA DE BOTÕES: Rotação no Botão Direito >>>
-    // Rotação: Botão Direito (THREE.MOUSE.RIGHT)
+    // <<< CORREÇÃO: Mapeamento de Botões para Rotação e Panning >>>
+    // A rotação deve ser no botão direito (2) para evitar conflito com o desenho
     controls.mouseButtons = {
-        LEFT: THREE.MOUSE.PAN,      // Clique Esquerdo (Agora Pan/Arrastar lateral)
-        MIDDLE: THREE.MOUSE.DOLLY,  // Scroll (Zoom, que desativamos para usar a roda)
-        RIGHT: THREE.MOUSE.ROTATE   // Botão Direito (Agora Rotação/Órbita)
+        LEFT: THREE.MOUSE.DOLLY,    // Usado para Dolly/Zoom (Mas o onWheel sobrepõe isso)
+        MIDDLE: THREE.MOUSE.PAN,    // Botão do meio para Panning/Arrastar (UX clássica)
+        RIGHT: THREE.MOUSE.ROTATE   // Botão Direito para Órbita/Girar
     };
-    // <<< FIM DA TROCA >>>
+    // <<< FIM DA CORREÇÃO >>>
 
     controls.screenSpacePanning = true; 
     controls.enableZoom = false; 
@@ -128,12 +128,12 @@ function initThreeJS() {
     scene.add(directionalLight);
 
     // 4.1.5. Adiciona Listeners
-    window.addEventListener('resize', onWindowResize);
-    renderer.domElement.addEventListener('click', onClick);
+    window.addEventListener('resize', onWindowResize); 
+    renderer.domElement.addEventListener('click', onClick);      
     renderer.domElement.addEventListener('dblclick', onDoubleClick);
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false }); 
     renderer.domElement.addEventListener('mousedown', onMouseDown, false); 
-    window.addEventListener('mouseup', onMouseUp, false); // MouseUp global
+    window.addEventListener('mouseup', onMouseUp, false); 
     
     animate();
     updateStatus('Cena 3D inicializada. Carregue um modelo.');
@@ -244,7 +244,7 @@ const toggleAnnotations = () => {
       sprite.visible = isAnnotationModeActive;
   });
 
-  updateStatus(isAnnotationModeActive ? 'Modo de Anotação ATIVADO. Clique DUPLO no modelo para adicionar notas. Clique simples para apagar/editar.' : 'Modo de Anotação DESATIVADO.');
+  updateStatus(isAnnotationModeActive ? 'Modo de Anotação ATIVADO. Clique DUPLO para texto, Clique ESQUERDO e arraste para desenhar.' : 'Modo de Anotação DESATIVADO.');
 };
 
 /**
@@ -285,9 +285,36 @@ const saveAnnotation = () => {
   const text = modalTextInput.value.trim();
   if (!title) { alert("Por favor, insira um título."); return; }
 
-  // 7.4.1. Chama a função que cria o objeto visual no Three.js
+  // Cria o Sprite visual na cena
   createAnnotationSprite(currentAnnotationData.point, title, text);
   hideAnnotationModal();
+};
+
+/**
+ * 7.5. <<< NOVA FUNÇÃO: Desfazer (Undo) a última anotação ou traço >>>
+ */
+const undoLastAnnotation = () => {
+    if (annotationSprites.length === 0) {
+        updateStatus("Não há anotações ou desenhos para desfazer.");
+        return;
+    }
+
+    // Pega no último objeto do array
+    const lastObject = annotationSprites[annotationSprites.length - 1];
+    
+    // Remove da cena
+    scene.remove(lastObject);
+    
+    // Remove do array de gestão (pop)
+    annotationSprites.pop();
+    
+    // Limpeza de memória (essencial para Three.js)
+    if (lastObject.geometry) lastObject.geometry.dispose();
+    if (lastObject.material) lastObject.material.dispose();
+    if (lastObject.material.map) lastObject.material.map.dispose();
+
+    updateStatus(`Desfeito: Última anotação/desenho removida.`);
+    console.log('Undo successful. Total annotations remaining:', annotationSprites.length);
 };
 
 // --- 8.0. Funções de Renderização e Criação de Sprite ---
@@ -449,6 +476,7 @@ function onMouseMove(event) {
 // 10.0.3. Iniciar o Desenho (Mouse Down)
 function onMouseDown(event) {
     // 1. Verifica se o modo de anotação está ativo e se o clique foi no botão esquerdo (0)
+    // O desenho livre está no botão esquerdo
     if (!isAnnotationModeActive || event.button !== 0) return;
 
     // 2. Configura Raycaster na posição do rato
@@ -464,34 +492,36 @@ function onMouseDown(event) {
          console.log('10.0.3. Desenho Livre continuado.');
          isDrawing = true;
     } 
-    // <<< CORREÇÃO: Inicia o desenho se o modo estiver ativo, independentemente de atingir o modelo >>>
-    else {
-        // Se for um novo desenho, inicia se o modo estiver ativo
-        console.log('10.0.3. Novo Desenho Livre iniciado.');
+    // <<< CORREÇÃO: Inicia o desenho SEMPRE que o modo estiver ativo >>>
+    else if (isAnnotationModeActive) {
+        console.log('10.0.3. Novo Desenho Livre iniciado (Qualquer lugar).');
         isDrawing = true;
         drawingPoints = []; 
         
         // 4. Cria o objeto THREE.Line inicial
-        const material = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 5, depthTest: false }); 
+        const material = new THREE.LineBasicMaterial({ 
+            color: 0xff0000, 
+            linewidth: 5, 
+            depthTest: false 
+        }); 
         const geometry = new THREE.BufferGeometry();
         geometry.setDrawRange(0, 0); 
         currentDrawingLine = new THREE.Line(geometry, material);
         currentDrawingLine.userData = { isAnnotation: true, title: "Desenho Livre" };
         scene.add(currentDrawingLine);
         
-        // 5. Cria/Atualiza o Plano Virtual de Traçado (Usando a última distância conhecida ou uma distância padrão)
+        // 5. Cria/Atualiza o Plano Virtual de Traçado
         
-        // Calcula o ponto inicial para o plano: ponto no modelo OU no ar
         let initialPoint;
         if (modelIntersects.length > 0) {
+            // Se acertou no modelo, usa o ponto de interseção
             initialPoint = modelIntersects[0].point.clone();
-            lastIntersectionDistance = modelIntersects[0].distance; // Atualiza a distância
+            lastIntersectionDistance = modelIntersects[0].distance;
         } else {
-            // Se não acertou no modelo, projeta o ponto do cursor na profundidade conhecida (lastIntersectionDistance)
-            const projectedVector = new THREE.Vector3(mouse.x, mouse.y, 0.5); // 0.5 é a profundidade do clipping
-            projectedVector.unproject(camera); // Converte coordenadas do ecrã para coordenadas do mundo
+            // Se não acertou no modelo, projeta o ponto do cursor na profundidade conhecida
+            const projectedVector = new THREE.Vector3(mouse.x, mouse.y, 0.5); 
+            projectedVector.unproject(camera); 
             
-            // Move o ponto para a distância conhecida
             const direction = new THREE.Vector3().subVectors(projectedVector, camera.position).normalize();
             initialPoint = camera.position.clone().add(direction.multiplyScalar(lastIntersectionDistance));
         }
@@ -523,7 +553,6 @@ function onMouseUp(event) {
     console.log('10.0.4. Desenho Livre finalizado. Total de pontos:', drawingPoints.length);
     isDrawing = false;
     
-    // Remove o ouvinte de MouseMove
     renderer.domElement.removeEventListener('mousemove', onMouseMove, false);
     
     // Reativa os OrbitControls
@@ -532,8 +561,7 @@ function onMouseUp(event) {
     // Limpa o Plano Virtual (pois o traçado terminou)
     if (drawingPlane) {
         scene.remove(drawingPlane);
-        // Não removemos o plano da memória (drawingPlane = null)
-        // O plano será substituído no próximo onMouseDown, economizando a alocação de memória
+        drawingPlane = null;
     }
 
     // Se a linha for válida, adiciona-a ao array de gestão
@@ -546,7 +574,7 @@ function onMouseUp(event) {
         currentDrawingLine.geometry.dispose();
         currentDrawingLine.material.dispose();
         currentDrawingLine = null;
-        updateStatus('Desenho muito curto removido.');
+        updateStatus('Desenho muito curto removido.'); // Mantemos a mensagem
     }
     
     currentDrawingLine = null; // Limpa a linha atual
@@ -558,7 +586,7 @@ function onMouseUp(event) {
  * Responsável por Menu de Ação/Apagar Anotações ou Mover o Foco (Target-on-Click).
  */
 function onClick(event) {
-    // Se o mouse up aconteceu, mas o evento de click disparou, ignora
+    // Se o OrbitControls estiver desativado, o clique deve ser ignorado.
     if (controls.enabled === false) return; 
     
     console.log('10.1. Single Click Detected.');
@@ -570,32 +598,8 @@ function onClick(event) {
     raycaster.setFromCamera(mouse, camera);
 
     // 10.1.2. Lógica de AÇÃO NA ANOTAÇÃO (Menu de Contexto/Apagar)
-    if (isAnnotationModeActive && annotationSprites.length > 0) {
-        const intersects = raycaster.intersectObjects(annotationSprites);
-
-        if (intersects.length > 0) {
-            const clickedObject = intersects[0].object;
-
-            if (clickedObject.userData.isAnnotation || clickedObject.type === 'Line') {
-                const title = clickedObject.userData.title || "Desenho Livre";
-                const confirmDelete = confirm(`Deseja APAGAR a anotação/desenho "${title}"?`);
-
-                if (confirmDelete) {
-                    scene.remove(clickedObject);
-                    annotationSprites = annotationSprites.filter(obj => obj !== clickedObject);
-                    // Limpeza de memória
-                    if (clickedObject.geometry) clickedObject.geometry.dispose();
-                    if (clickedObject.material) clickedObject.material.dispose();
-                    if (clickedObject.material.map) clickedObject.material.map.dispose();
-
-                    updateStatus(`Anotação/Desenho "${title}" removida.`);
-                }
-                event.stopPropagation(); 
-                return; // Finaliza o clique
-            }
-        }
-    }
-
+    // Foi movida para onContextMenu (botão direito)
+    
     // 10.1.3. Lógica de MOVER FOCO (Target-on-Click)
     if (loadedModel) {
         const intersects = raycaster.intersectObject(loadedModel, true);
@@ -715,8 +719,10 @@ function onContextMenu(event) {
     }
 }
 
-
 // --- 11.0. Adicionar "Ouvintes" de Eventos (Ligações de Botões) ---
+
+// 11.0.1. Nota: Adicionar referência ao novo botão aqui
+const btnUndo = document.getElementById('btn-undo'); 
 
 console.log('11.0. Attaching event listeners to buttons...');
 
@@ -751,22 +757,31 @@ if (btnLoadState) {
     console.error('!!! Erro 11.4: btnLoadState not found.');
 }
 
+// <<< NOVO: Botão Desfazer (Undo) >>>
+if (btnUndo) {
+    console.log('11.5. Attaching listener to btnUndo.');
+    btnUndo.addEventListener('click', undoLastAnnotation);
+} else {
+    console.warn('!!! Aviso 11.5: btnUndo not found (Adicione ao HTML).');
+}
+// <<< FIM DO NOVO BOTÃO >>>
+
 // Botões do Modal
 if (modalBtnSave) {
-    console.log('11.5. Attaching listener to modalBtnSave.');
+    console.log('11.6. Attaching listener to modalBtnSave.');
     modalBtnSave.addEventListener('click', saveAnnotation);
 } else {
-    console.error('!!! Erro 11.5: modalBtnSave not found.');
+    console.error('!!! Erro 11.6: modalBtnSave not found.');
 }
 
 if (modalBtnCancel) {
-    console.log('11.6. Attaching listener to modalBtnCancel.');
+    console.log('11.7. Attaching listener to modalBtnCancel.');
     modalBtnCancel.addEventListener('click', hideAnnotationModal);
 } else {
-    console.error('!!! Erro 11.6: modalBtnCancel not found.');
+    console.error('!!! Erro 11.7: modalBtnCancel not found.');
 }
 
-console.log('11.7. Button listeners attached.');
+console.log('11.8. Button listeners attached.');
 
 
 // --- 12.0. Inicialização Final da Aplicação ---
