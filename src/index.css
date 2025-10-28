@@ -227,3 +227,16 @@ model-viewer {
 
 /* Remove a regra antiga do model-viewer, se ainda existir */
 /* model-viewer { ... } */
+/* Estilo para as Ferramentas de Desenho */
+#drawing-tools h3 {
+    margin-top: 5px;
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: #ccc;
+    text-align: center;
+}
+#drawing-tools label {
+    display: block;
+    font-size: 13px;
+    margin-top: 10px;
+}

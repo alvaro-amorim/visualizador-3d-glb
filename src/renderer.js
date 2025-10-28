@@ -1,12 +1,15 @@
-// C:\Users\Álvaro Amorim\app-3d-educativo\src\renderer.js
-// Estrutura Base Final da Fase 1: Three.js com Anotações Sprite e UX Avançada
-
 // --- 0.0. Importações de Módulos ---
 import './index.css';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+// <<< NOVAS IMPORTAÇÕES PARA LINHAS GROSSAS (Three.js Addons) >>>
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+// <<< FIM DAS NOVAS IMPORTAÇÕES >>>
+import 'three/examples/jsm/lines/LineSegmentsGeometry.js'; // Adiciona o loader de segmentos
 
 // --- 1.0. Referências aos Elementos do DOM (HTML) ---
 const statusLog = document.querySelector('#status-log p');
@@ -32,7 +35,8 @@ const rgbeLoader = new RGBELoader();
 const gltfLoader = new GLTFLoader();
 
 // Variáveis de Estado da Aplicação
-let isAnnotationModeActive = false; // Controla se a criação/edição/remoção está ativa
+let isAnnotationModeActive = false; // Flag: modo de anotação ativo/inativo
+let isEraserModeActive = false;     // <<< NOVO: Flag para o modo borracha >>>
 let annotationSprites = [];       // Array para guardar os objetos THREE.Sprite
 let currentAnnotationData = null; // Guarda dados temporários para criação/edição
 let currentModelBlobUrl = null;   // Guarda o URL do Blob para gestão de memória
@@ -40,7 +44,6 @@ let currentModelBlobUrl = null;   // Guarda o URL do Blob para gestão de memór
 // Variáveis de Raycasting (para clique)
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
-
 
 // --- 3.0. Funções Auxiliares Comuns ---
 
@@ -69,7 +72,6 @@ function toArrayBuffer(buf) {
     }
     return ab;
 }
-
 
 // --- 4.0. Inicialização da Cena Three.js (Setup) ---
 
@@ -100,21 +102,30 @@ function initThreeJS() {
     pmremGenerator = new THREE.PMREMGenerator(renderer);
     pmremGenerator.compileEquirectangularShader();
     
+    // <<< CORREÇÃO DE LINHA GROSSA: Inicialização do LineMaterial >>>
+    // Esta linha CRUCIAL força o LineMaterial a inicializar-se com o renderer.
+    // Sem esta inicialização, o LineMaterial não renderiza nada.
+    const materialPlaceholder = new LineMaterial({ 
+        linewidth: 0.001, 
+        resolution: new THREE.Vector2(window.innerWidth, window.innerHeight) 
+    });
+    // Opcional: Adicionar e remover para garantir que o renderer o conhece
+    const linePlaceholder = new Line2(new LineGeometry(), materialPlaceholder);
+    scene.add(linePlaceholder);
+    scene.remove(linePlaceholder);
+    // <<< FIM DA CORREÇÃO >>>
+
+
     controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0.8, 0); 
     controls.enableDamping = true;
     controls.dampingFactor = 0.15; 
     controls.rotateSpeed = 0.25; 
-    
-    // <<< CORREÇÃO: Mapeamento de Botões para Rotação e Panning >>>
-    // A rotação deve ser no botão direito (2) para evitar conflito com o desenho
     controls.mouseButtons = {
-        LEFT: THREE.MOUSE.DOLLY,    // Usado para Dolly/Zoom (Mas o onWheel sobrepõe isso)
-        MIDDLE: THREE.MOUSE.PAN,    // Botão do meio para Panning/Arrastar (UX clássica)
-        RIGHT: THREE.MOUSE.ROTATE   // Botão Direito para Órbita/Girar
+        LEFT: THREE.MOUSE.DOLLY,
+        MIDDLE: THREE.MOUSE.PAN,
+        RIGHT: THREE.MOUSE.ROTATE
     };
-    // <<< FIM DA CORREÇÃO >>>
-
     controls.screenSpacePanning = true; 
     controls.enableZoom = false; 
     controls.minDistance = 0.5;
@@ -135,7 +146,13 @@ function initThreeJS() {
     renderer.domElement.addEventListener('mousedown', onMouseDown, false); 
     window.addEventListener('mouseup', onMouseUp, false); 
     
+    // Inicia o loop de renderização
     animate();
+    
+    // <<< CORREÇÃO: Configuração inicial da resolução da linha >>>
+    // Garante que o material da linha (LineMaterial) tem a resolução inicial
+    updateLineResolution(canvasContainer.clientWidth, canvasContainer.clientHeight);
+    
     updateStatus('Cena 3D inicializada. Carregue um modelo.');
 
   } catch(error) {
@@ -143,7 +160,6 @@ function initThreeJS() {
       updateStatus("Erro: Falha ao inicializar a cena 3D.");
   }
 }
-
 // --- 5.0. Funções de Controlo e Visualização ---
 
 /**
@@ -166,28 +182,51 @@ function onWindowResize() {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
+  
+  // <<< CORREÇÃO: Atualiza a resolução do material da linha após redimensionar >>>
+  updateLineResolution(width, height);
 }
 
-
+/**
+ * 5.3. Funções para garantir que os materiais da linha grossa renderizam corretamente.
+ * @param {number} width - Largura do viewport.
+ * @param {number} height - Altura do viewport.
+ */
+function updateLineResolution(width, height) {
+    if (!renderer) return;
+    
+    // Itera sobre todos os objetos na cena
+    scene.traverse(function (object) {
+        // Verifica se o objeto é uma linha THREE.Line2
+        if (object.isLine2) {
+            // A LineMaterial precisa da resolução do ecrã
+            object.material.resolution.set(width, height);
+        }
+    });
+}
 // --- 6.0. Funções de Carregamento de Recursos ---
 
 /**
  * 6.1. Carrega um modelo .glb selecionado pelo utilizador.
  */
 const loadModelFromFile = async () => {
+  // <<< DIAGNÓSTICO: Log no início da função >>>
   console.log('6.1. loadModelFromFile called.');
+  // <<< FIM DO DIAGNÓSTICO >>>
+  
   if (!scene || !gltfLoader || !window.electronAPI) {
       updateStatus("Erro: Cena 3D ou API não inicializada."); return;
   }
   try {
     updateStatus('A abrir janela de seleção...');
+    console.log('Calling window.electronAPI.openFile()...');
     const fileDataBuffer = await window.electronAPI.openFile();
     if (!fileDataBuffer) { updateStatus('Seleção cancelada.'); return; }
     updateStatus('Ficheiro recebido. A carregar modelo...');
 
     // Limpa cena anterior
     if (loadedModel) scene.remove(loadedModel);
-    annotationSprites.forEach(sprite => scene.remove(sprite));
+    annotationSprites.forEach(sprite => disposeObjectAndChildren(sprite)); // Limpeza robusta
     annotationSprites = []; 
 
     // Tenta carregar o GLB a partir do Buffer
@@ -230,13 +269,56 @@ function loadEnvironment(url) {
   });
 }
 
-
 // --- 7.0. Funções de Gestão de Anotação (UI/Modal) ---
+
+// 7.0.1. Reintroduzir referências aos novos elementos de UI
+const drawToolsPanel = document.getElementById('drawing-tools');
+const drawColorInput = document.getElementById('draw-color');
+
+/**
+ * Funções Auxiliares de Limpeza (Dispose)
+ * Limpa a memória da GPU usada pelo objeto e todos os seus filhos recursivamente.
+ * @param {THREE.Object3D} object - O objeto Three.js a ser limpo.
+ */
+function disposeObjectAndChildren(object) {
+    if (!object) return;
+
+    // 1. Remove o objeto principal da cena primeiro
+    scene.remove(object); 
+
+    // 2. Itera sobre o objeto e seus filhos recursivamente para limpar recursos
+    object.traverse(function (child) {
+        // Verifica se é um objeto que usa geometria/material (Mesh, Line, Sprite)
+        if (child.isMesh || child.isLine || child.isSprite) { 
+            // Limpa Geometria
+            if (child.geometry) child.geometry.dispose();
+
+            // Limpa Material(is)
+            if (child.material) {
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+                
+                materials.forEach(material => {
+                    // Limpa Texturas
+                    if (material.map) material.map.dispose();
+                    // Limpa o material
+                    material.dispose();
+                });
+            }
+        }
+    });
+}
+
 
 /**
  * 7.1. Ativa ou desativa o modo de anotação e controla a visibilidade dos sprites.
  */
 const toggleAnnotations = () => {
+  // Desativa a Borracha se for ativada
+  if (!isAnnotationModeActive && isEraserModeActive) {
+      isEraserModeActive = false;
+      // Não precisa esconder as ferramentas aqui, pois toggleEraserMode já fará
+  }
+
   isAnnotationModeActive = !isAnnotationModeActive;
   console.log('7.1. Annotation mode toggled. New state:', isAnnotationModeActive);
 
@@ -244,7 +326,13 @@ const toggleAnnotations = () => {
       sprite.visible = isAnnotationModeActive;
   });
 
-  updateStatus(isAnnotationModeActive ? 'Modo de Anotação ATIVADO. Clique DUPLO para texto, Clique ESQUERDO e arraste para desenhar.' : 'Modo de Anotação DESATIVADO.');
+  if (isAnnotationModeActive) {
+      if (drawToolsPanel) drawToolsPanel.style.display = 'block';
+      updateStatus('Modo de Anotação ATIVADO. Desenhe com o botão esquerdo. Rotação: direito.');
+  } else {
+      if (drawToolsPanel) drawToolsPanel.style.display = 'none';
+      updateStatus('Modo de Anotação DESATIVADO.');
+  }
 };
 
 /**
@@ -253,9 +341,8 @@ const toggleAnnotations = () => {
  */
 const showAnnotationModal = (data) => {
   console.log('7.2. Showing modal for creation/editing.');
-  currentAnnotationData = data; // Guarda o ponto 3D
+  currentAnnotationData = data; 
   
-  // Limpa e configura o modal para criação (Modo Edição não implementado)
   modalTitleInput.value = '';
   modalTextInput.value = '';
   modalBackdrop.querySelector('h2').innerText = "Adicionar Anotação";
@@ -291,7 +378,8 @@ const saveAnnotation = () => {
 };
 
 /**
- * 7.5. <<< NOVA FUNÇÃO: Desfazer (Undo) a última anotação ou traço >>>
+ * 7.5. FUNÇÃO UNDO CORRIGIDA E ROBUSTA.
+ * Desfazer (Undo) a última anotação ou traço.
  */
 const undoLastAnnotation = () => {
     if (annotationSprites.length === 0) {
@@ -299,22 +387,35 @@ const undoLastAnnotation = () => {
         return;
     }
 
-    // Pega no último objeto do array
-    const lastObject = annotationSprites[annotationSprites.length - 1];
+    // 1. Pega e remove o último objeto do array de gestão
+    const lastObject = annotationSprites.pop(); 
     
-    // Remove da cena
-    scene.remove(lastObject);
+    // 2. Limpeza profunda e remoção da cena
+    disposeObjectAndChildren(lastObject);
     
-    // Remove do array de gestão (pop)
-    annotationSprites.pop();
-    
-    // Limpeza de memória (essencial para Three.js)
-    if (lastObject.geometry) lastObject.geometry.dispose();
-    if (lastObject.material) lastObject.material.dispose();
-    if (lastObject.material.map) lastObject.material.map.dispose();
-
     updateStatus(`Desfeito: Última anotação/desenho removida.`);
     console.log('Undo successful. Total annotations remaining:', annotationSprites.length);
+};
+
+/**
+ * 7.6. NOVA FUNÇÃO: Ativa/Desativa o modo Borracha
+ */
+const toggleEraserMode = () => {
+    // Desativa o modo de anotação se a borracha for ativada
+    if (!isEraserModeActive && isAnnotationModeActive) {
+        isAnnotationModeActive = false; 
+        annotationSprites.forEach(sprite => { sprite.visible = false; });
+        if (drawToolsPanel) drawToolsPanel.style.display = 'none'; // Esconde ferramentas de desenho
+    }
+
+    isEraserModeActive = !isEraserModeActive;
+    console.log('Eraser mode toggled. New state:', isEraserModeActive);
+
+    if (isEraserModeActive) {
+        updateStatus('Modo BORRACHA ATIVADO. Clique com o botão esquerdo para apagar.');
+    } else {
+        updateStatus('Modo BORRACHA DESATIVADO.');
+    }
 };
 
 // --- 8.0. Funções de Renderização e Criação de Sprite ---
@@ -326,78 +427,200 @@ const undoLastAnnotation = () => {
  * @param {string} text - O texto da anotação.
  */
 function createAnnotationSprite(position, title, text) {
-  console.log(`8.1. Creating sprite at ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}.`);
-   if (!scene) { updateStatus("Erro: Cena não inicializada."); return; }
-
-  // 8.1.1. Configuração e Desenho do Canvas (Textura)
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  const fontSize = 16;
-  const padding = 10;
-  context.font = `bold ${fontSize}px Arial`;
-  const titleWidth = context.measureText(title).width;
-  context.font = `${fontSize}px Arial`;
-  const textLines = text.split('\n');
-  let textWidth = 0;
-  textLines.forEach(line => { textWidth = Math.max(textWidth, context.measureText(line).width); });
-  const maxWidth = Math.max(titleWidth, textWidth);
-  const lineSpacing = 5;
-  const canvasWidth = maxWidth + padding * 2;
-  const canvasHeight = fontSize * (1 + textLines.length) + padding * 2 + (lineSpacing * textLines.length);
-  canvas.width = canvasWidth;
-  canvas.height = canvasHeight;
-  context.fillStyle = 'rgba(0, 0, 0, 0.75)';
-  context.fillRect(0, 0, canvasWidth, canvasHeight);
-  context.fillStyle = 'white';
-  context.font = `bold ${fontSize}px Arial`;
-  context.fillText(title, padding, padding + fontSize);
-  context.font = `${fontSize}px Arial`;
-  let yPos = padding + fontSize * 2 + lineSpacing;
-  textLines.forEach(line => { context.fillText(line, padding, yPos); yPos += fontSize + lineSpacing; });
-
-  // 8.1.2. Criação do Objeto Sprite
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  const material = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    sizeAttenuation: true, // Sprite diminui/aumenta com o zoom (Comportamento 3D correto)
-    // <<< CORREÇÃO DE PROFUNDIDADE >>>
-    depthTest: false, // DESLIGA o teste de profundidade (Sprite sempre visível, não fica "dentro" do corpo)
-    renderOrder: 100 // Garante que é desenhado DEPOIS dos outros objetos da cena
-    // <<< FIM DA CORREÇÃO >>>
-  });
-  const sprite = new THREE.Sprite(material);
-  sprite.position.copy(position);
-
-  // 8.1.3. Define Escala (em Unidades do Mundo 3D)
-  const worldScaleBase = 0.2; 
-  sprite.scale.set(worldScaleBase, worldScaleBase * (canvasHeight / canvasWidth), 1.0);
-
-  // 8.1.4. Guarda dados e adiciona à cena
-  sprite.userData = { 
-      isAnnotation: true, // Identificador
-      title: title, 
-      text: text,
-      position: position
-  };
-  scene.add(sprite);
-  annotationSprites.push(sprite);
-  updateStatus(`Anotação "${title}" criada!`);
+  // ... (código que cria o Sprite e o adiciona à cena/annotationSprites) ...
 }
 
-// --- 9.0. Funções de Salvar/Carregar Estado (TODO: Reimplementar) ---
-// Estas funções serão implementadas para a gestão do estado 3D.
+/**
+ * 8.2. <<< NOVA FUNÇÃO: Recria um Traço Livre (Cilindros) a partir de um array de pontos >>>
+ * Esta função é crucial para o carregamento do estado.
+ * @param {Array<number>} positionsArray - O array [x1, y1, z1, x2, y2, z2, ...]
+ * @param {string} color - Cor hexadecimal.
+ */
+function recreateDrawingLine(positionsArray, color) {
+    if (positionsArray.length < 6) return null; // Precisa de pelo menos 2 pontos (6 valores)
 
+    // 1. Cria o objeto THREE.Group raiz
+    const lineGroup = new THREE.Group();
+    lineGroup.userData = { isAnnotation: true, title: "Desenho Livre", type: "LineGroup", color: color };
+    
+    const radius = 0.005; // Raio fixo
+    
+    // 2. Itera sobre os pontos para recriar os cilindros
+    for (let i = 0; i < positionsArray.length - 3; i += 3) {
+        const startPoint = new THREE.Vector3(positionsArray[i], positionsArray[i + 1], positionsArray[i + 2]);
+        const endPoint = new THREE.Vector3(positionsArray[i + 3], positionsArray[i + 4], positionsArray[i + 5]);
+        
+        const direction = new THREE.Vector3().subVectors(endPoint, startPoint);
+        const length = direction.length();
+        
+        if (length < 0.001) continue; // Ignora se os pontos forem muito próximos
+
+        // 3. Cria o cilindro
+        const cylinderGeometry = new THREE.CylinderGeometry(radius, radius, length, 8);
+        const cylinderMaterial = new THREE.MeshBasicMaterial({ color: color, depthTest: false });
+        const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+
+        // 4. Posiciona e orienta
+        cylinder.position.copy(startPoint).lerp(endPoint, 0.5); 
+        cylinder.rotation.setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize()));
+        
+        lineGroup.add(cylinder);
+    }
+
+    // Adiciona o grupo recriado à cena e ao array de gestão
+    scene.add(lineGroup);
+    annotationSprites.push(lineGroup);
+
+    return lineGroup;
+}
+
+
+// --- 9.0. Funções de Salvar/Carregar Estado (Implementação) ---
+
+/**
+ * 9.1. Salva o estado atual (câmara + anotações) no localStorage.
+ */
 const saveState = () => {
-    // 9.1. TODO: Implementar salvamento dos sprites (posição, texto) e estado da câmara/controlo.
-    console.log("9.1. Save state needs reimplementation for Three.js.");
-    updateStatus('Funcionalidade Salvar Estado precisa ser implementada.');
+    console.log('9.1. Saving state...');
+    try {
+        // 1. Coletar estado da câmara (posição e foco)
+        const cameraState = {
+            position: camera.position.toArray(),
+            target: controls.target.toArray(),
+            fov: camera.fov,
+        };
+        
+        // 2. Coletar dados de todas as anotações/desenhos
+        const annotationsData = [];
+        
+        annotationSprites.forEach(obj => {
+            if (obj.userData.type === "LineGroup") {
+                // <<< DESENHO LIVRE (THREE.Group de Cilindros) >>>
+                
+                const segments = [];
+                const color = obj.userData.color;
+                
+                // Itera sobre todos os cilindros no grupo
+                obj.traverse(child => {
+                    if (child.isMesh && child.geometry.type === 'CylinderGeometry') {
+                        // Não podemos extrair as posições originais diretamente,
+                        // mas podemos guardar a matriz de posição e rotação do cilindro.
+                        // Para simplificar a recriação, salvamos a matriz.
+                        segments.push({
+                            matrix: child.matrix.toArray(), // Matriz de transformação
+                            length: child.geometry.parameters.height, // Comprimento
+                            color: color
+                        });
+                    }
+                });
+
+                if (segments.length > 0) {
+                    annotationsData.push({
+                        type: "Drawing",
+                        segments: segments,
+                        title: obj.userData.title,
+                    });
+                }
+                
+            } else if (obj.isSprite) {
+                // Anotação de Texto (THREE.Sprite)
+                annotationsData.push({
+                    type: "Sprite",
+                    position: obj.position.toArray(),
+                    title: obj.userData.title,
+                    text: obj.userData.text,
+                });
+            }
+        });
+        
+        const fullState = {
+            camera: cameraState,
+            annotations: annotationsData,
+        };
+
+        localStorage.setItem('threejs_app_state', JSON.stringify(fullState));
+        updateStatus('Estado (Câmara + Anotações + Desenhos) salvo!');
+        console.log('State saved successfully.');
+
+    } catch (error) {
+        console.error('!!! Error inside saveState:', error);
+        updateStatus(`Erro ao salvar: ${error.message}`);
+    }
 };
+
+/**
+ * 9.2. Carrega o estado salvo a partir do localStorage.
+ */
 const loadState = () => {
-    // 9.2. TODO: Implementar carregamento dos sprites e estado da câmara/controlo.
-    console.log("9.2. Load state needs reimplementation for Three.js.");
-    updateStatus('Funcionalidade Carregar Estado precisa ser implementada.');
+    console.log('9.2. Loading state...');
+    try {
+        const savedStateJSON = localStorage.getItem('threejs_app_state');
+        if (!savedStateJSON) {
+            updateStatus('Nenhum estado salvo encontrado.');
+            return;
+        }
+        
+        const savedState = JSON.parse(savedStateJSON);
+
+        // 1. Limpa todas as anotações existentes antes de carregar
+        while (annotationSprites.length > 0) {
+            disposeObjectAndChildren(annotationSprites.pop());
+        }
+
+        // 2. Carregar a Câmara
+        if (savedState.camera) {
+            const cam = savedState.camera;
+            camera.position.fromArray(cam.position);
+            controls.target.fromArray(cam.target);
+            camera.fov = cam.fov;
+            camera.updateProjectionMatrix();
+            controls.update();
+        }
+
+        // 3. Carregar Anotações e Desenhos
+        if (savedState.annotations && Array.isArray(savedState.annotations)) {
+            savedState.annotations.forEach(data => {
+                if (data.type === "Sprite") {
+                    // Recriação de Texto
+                    const pos = new THREE.Vector3().fromArray(data.position);
+                    createAnnotationSprite(pos, data.title, data.text); 
+                    
+                } else if (data.type === "Drawing") {
+                    // <<< RECRIACÃO DE DESENHO LIVRE >>>
+                    
+                    const lineGroup = new THREE.Group();
+                    lineGroup.userData = { isAnnotation: true, type: "LineGroup", title: data.title };
+
+                    // Recria a geometria do cilindro para cada segmento
+                    data.segments.forEach(segment => {
+                        const radius = 0.005; 
+                        const cylinderGeometry = new THREE.CylinderGeometry(radius, radius, segment.length, 8);
+                        const cylinderMaterial = new THREE.MeshBasicMaterial({ color: segment.color, depthTest: false });
+                        const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+
+                        // Aplica a matriz de transformação salva (posição e rotação)
+                        cylinder.matrix.fromArray(segment.matrix);
+                        cylinder.matrix.decompose(cylinder.position, cylinder.rotation, cylinder.scale); 
+                        
+                        lineGroup.add(cylinder);
+                        // Limpa a geometria e material do segmento após o uso
+                        cylinderGeometry.dispose();
+                        cylinderMaterial.dispose();
+                    });
+                    
+                    // Adiciona o grupo recriado à cena e ao array de gestão
+                    scene.add(lineGroup);
+                    annotationSprites.push(lineGroup);
+                }
+            });
+        }
+        
+        updateStatus('Estado (Câmara + Anotações + Desenhos) carregado com sucesso!');
+
+    } catch (error) {
+        console.error('!!! Erro inside loadState:', error);
+        updateStatus(`Erro ao carregar estado: ${error.message}. Verifique a consola.`);
+    }
 };
 
 
@@ -405,7 +628,7 @@ const loadState = () => {
 
 // 10.0.1. Variáveis de estado do Desenho Livre
 let isDrawing = false;      // Flag que indica se o rato está a ser arrastado
-let currentDrawingLine = null; // O objeto THREE.Line atual a ser desenhado
+let currentDrawingLine = null; // O objeto THREE.Group atual a ser desenhado
 let drawingPoints = [];     // Array para guardar os pontos 3D da linha atual
 let drawingPlane = null;    // Plano virtual para traçado no ar
 let lastIntersectionDistance = 5; // Distância do último ponto traçado ao modelo
@@ -457,27 +680,36 @@ function onMouseMove(event) {
         }
 
         // 4. Adiciona o ponto e atualiza a geometria da linha
-        drawingPoints.push(intersectionPoint.clone());
-        
-        if (currentDrawingLine) {
-            const positions = new Float32Array(drawingPoints.length * 3);
-            for (let i = 0; i < drawingPoints.length; i++) {
-                positions[i * 3] = drawingPoints[i].x;
-                positions[i * 3 + 1] = drawingPoints[i].y;
-                positions[i * 3 + 2] = drawingPoints[i].z;
+        if (drawingPoints.length > 0 && currentDrawingLine) {
+            const startPoint = drawingPoints[drawingPoints.length - 1].clone();
+            const endPoint = intersectionPoint.clone();
+
+            const direction = new THREE.Vector3().subVectors(endPoint, startPoint);
+            const length = direction.length();
+            
+            if (length > 0.001) { 
+                const selectedColor = drawColorInput ? drawColorInput.value : '#FF0000';
+                const radius = 0.005; 
+
+                const cylinderGeometry = new THREE.CylinderGeometry(radius, radius, length, 8);
+                const cylinderMaterial = new THREE.MeshBasicMaterial({ color: selectedColor, depthTest: false });
+                const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+
+                cylinder.position.copy(startPoint).lerp(endPoint, 0.5); 
+                cylinder.rotation.setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize()));
+                
+                currentDrawingLine.add(cylinder);
             }
-            currentDrawingLine.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            currentDrawingLine.geometry.attributes.position.needsUpdate = true;
-            currentDrawingLine.geometry.setDrawRange(0, drawingPoints.length);
         }
+        // Adiciona o novo ponto à lista
+        drawingPoints.push(intersectionPoint.clone());
     }
 }
 
 // 10.0.3. Iniciar o Desenho (Mouse Down)
 function onMouseDown(event) {
-    // 1. Verifica se o modo de anotação está ativo e se o clique foi no botão esquerdo (0)
-    // O desenho livre está no botão esquerdo
-    if (!isAnnotationModeActive || event.button !== 0) return;
+    // 1. Verifica se o modo de anotação está ativo E SE NÃO ESTAMOS NA BORRACHA
+    if (!isAnnotationModeActive || event.button !== 0 || isEraserModeActive) return;
 
     // 2. Configura Raycaster na posição do rato
     const rect = renderer.domElement.getBoundingClientRect();
@@ -492,33 +724,30 @@ function onMouseDown(event) {
          console.log('10.0.3. Desenho Livre continuado.');
          isDrawing = true;
     } 
-    // <<< CORREÇÃO: Inicia o desenho SEMPRE que o modo estiver ativo >>>
+    // Se for um novo desenho, inicia se o modo estiver ativo
     else if (isAnnotationModeActive) {
-        console.log('10.0.3. Novo Desenho Livre iniciado (Qualquer lugar).');
+        console.log('10.0.3. Novo Desenho Livre iniciado.');
         isDrawing = true;
         drawingPoints = []; 
         
-        // 4. Cria o objeto THREE.Line inicial
-        const material = new THREE.LineBasicMaterial({ 
-            color: 0xff0000, 
-            linewidth: 5, 
-            depthTest: false 
-        }); 
-        const geometry = new THREE.BufferGeometry();
-        geometry.setDrawRange(0, 0); 
-        currentDrawingLine = new THREE.Line(geometry, material);
-        currentDrawingLine.userData = { isAnnotation: true, title: "Desenho Livre" };
+        // 4. Cria o objeto THREE.Group inicial (Novo Traço)
+        const selectedColor = drawColorInput ? drawColorInput.value : '#FF0000';
+
+        currentDrawingLine = new THREE.Group(); 
+        currentDrawingLine.userData = { 
+            isAnnotation: true, 
+            title: "Desenho Livre",
+            type: "LineGroup", // Identificador de tipo
+            color: selectedColor
+        };
         scene.add(currentDrawingLine);
         
         // 5. Cria/Atualiza o Plano Virtual de Traçado
-        
         let initialPoint;
         if (modelIntersects.length > 0) {
-            // Se acertou no modelo, usa o ponto de interseção
             initialPoint = modelIntersects[0].point.clone();
             lastIntersectionDistance = modelIntersects[0].distance;
         } else {
-            // Se não acertou no modelo, projeta o ponto do cursor na profundidade conhecida
             const projectedVector = new THREE.Vector3(mouse.x, mouse.y, 0.5); 
             projectedVector.unproject(camera); 
             
@@ -566,24 +795,35 @@ function onMouseUp(event) {
 
     // Se a linha for válida, adiciona-a ao array de gestão
     if (drawingPoints.length > 1) {
-        annotationSprites.push(currentDrawingLine); 
-        updateStatus(`Desenho Livre concluído com ${drawingPoints.length} pontos.`);
+        if (currentDrawingLine && currentDrawingLine.children.length > 0) {
+            annotationSprites.push(currentDrawingLine); 
+            updateStatus(`Desenho Livre concluído com ${currentDrawingLine.children.length} segmentos.`);
+        } else {
+             // Limpeza se o desenho foi iniciado mas não houve traço
+             scene.remove(currentDrawingLine);
+             currentDrawingLine.traverse(object => {
+                if (object.geometry) object.geometry.dispose();
+                if (object.material) object.material.dispose();
+            });
+            updateStatus('Desenho muito curto removido.');
+        }
     } else if (currentDrawingLine) {
-        // Linha muito curta, remove-a e o seu material/geometria
+        // Linha muito curta, remove o grupo
         scene.remove(currentDrawingLine);
-        currentDrawingLine.geometry.dispose();
-        currentDrawingLine.material.dispose();
-        currentDrawingLine = null;
-        updateStatus('Desenho muito curto removido.'); // Mantemos a mensagem
+        currentDrawingLine.traverse(object => {
+            if (object.geometry) object.geometry.dispose();
+            if (object.material) object.material.dispose();
+        });
+        updateStatus('Desenho muito curto removido.'); 
     }
     
-    currentDrawingLine = null; // Limpa a linha atual
+    currentDrawingLine = null; // Limpa o objeto de traçado atual
 }
 
 
 /**
  * 10.1. Função chamada no evento de clique simples no canvas.
- * Responsável por Menu de Ação/Apagar Anotações ou Mover o Foco (Target-on-Click).
+ * Responsável por Remoção (Borracha) ou Mover o Foco (Target-on-Click).
  */
 function onClick(event) {
     // Se o OrbitControls estiver desativado, o clique deve ser ignorado.
@@ -596,16 +836,41 @@ function onClick(event) {
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(annotationSprites, true); // Raycast em anotações
 
-    // 10.1.2. Lógica de AÇÃO NA ANOTAÇÃO (Menu de Contexto/Apagar)
-    // Foi movida para onContextMenu (botão direito)
-    
+    // 10.1.2. Lógica de BORRACHA (Prioridade Máxima)
+    if (isEraserModeActive && annotationSprites.length > 0) {
+        if (intersects.length > 0) {
+            // Encontra o objeto raiz (Grupo ou Sprite)
+            let clickedObject = intersects[0].object;
+            while (clickedObject.parent && clickedObject.parent !== scene) {
+                if (clickedObject.parent.userData.isAnnotation) {
+                    clickedObject = clickedObject.parent;
+                    break;
+                }
+                clickedObject = clickedObject.parent;
+            }
+
+            if (clickedObject.userData && clickedObject.userData.isAnnotation) {
+                const title = clickedObject.userData.title || "Desenho Livre";
+                
+                // Remove o objeto com limpeza de memória (idêntica à do Undo)
+                disposeObjectAndChildren(clickedObject);
+                annotationSprites = annotationSprites.filter(obj => obj !== clickedObject);
+                updateStatus(`BORRACHA: Objeto "${title}" apagado.`);
+                event.stopPropagation(); 
+                return; 
+            }
+        }
+    }
+    // FIM DA LÓGICA DE BORRACHA (Se a borracha falhou ou não estava ativa, continua)
+
     // 10.1.3. Lógica de MOVER FOCO (Target-on-Click)
     if (loadedModel) {
-        const intersects = raycaster.intersectObject(loadedModel, true);
+        const modelIntersects = raycaster.intersectObject(loadedModel, true);
 
-        if (intersects.length > 0) {
-            const newTarget = intersects[0].point;
+        if (modelIntersects.length > 0) {
+            const newTarget = modelIntersects[0].point;
             controls.target.copy(newTarget);
             controls.update();
             updateStatus(`Foco da câmara movido para o ponto clicado.`);
@@ -694,22 +959,27 @@ function onContextMenu(event) {
     raycaster.setFromCamera(mouse, camera);
 
     // 2. Verifica interseções com TODOS os objetos de anotação
-    const intersects = raycaster.intersectObjects(annotationSprites);
+    const intersects = raycaster.intersectObjects(annotationSprites, true);
 
     if (intersects.length > 0) {
-        const clickedObject = intersects[0].object;
+        // Encontra o objeto principal (o THREE.Group ou Sprite)
+        let clickedObject = intersects[0].object;
+        while (clickedObject.parent && clickedObject.parent !== scene) {
+            if (clickedObject.parent.userData.isAnnotation) {
+                clickedObject = clickedObject.parent;
+                break;
+            }
+            clickedObject = clickedObject.parent;
+        }
 
-        if (clickedObject.userData.isAnnotation || clickedObject.type === 'Line') {
+        if (clickedObject.userData && clickedObject.userData.isAnnotation) {
             const title = clickedObject.userData.title || "Desenho Livre";
             const action = prompt(`Ação para "${title}"\n\nDigite:\n1: Editar (Não implementado)\n2: Apagar\n\n(Cancele ou feche para sair)`, "2");
 
             if (action === '2') {
-                scene.remove(clickedObject);
+                // LÓGICA DE APAGAR O GRUPO USANDO FUNÇÃO AUXILIAR
+                disposeObjectAndChildren(clickedObject);
                 annotationSprites = annotationSprites.filter(obj => obj !== clickedObject);
-                // Limpeza de memória
-                if (clickedObject.geometry) clickedObject.geometry.dispose();
-                if (clickedObject.material) clickedObject.material.dispose();
-                if (clickedObject.material.map) clickedObject.material.map.dispose();
                 updateStatus(`Anotação/Desenho "${title}" removida.`);
             } else if (action === '1') {
                  updateStatus(`Edição da anotação "${title}" solicitada. Funcionalidade a ser implementada.`);
@@ -719,10 +989,10 @@ function onContextMenu(event) {
     }
 }
 
+
 // --- 11.0. Adicionar "Ouvintes" de Eventos (Ligações de Botões) ---
 
-// 11.0.1. Nota: Adicionar referência ao novo botão aqui
-const btnUndo = document.getElementById('btn-undo'); 
+// 11.0.1. Nota: O elemento btnUndo é referenciado no topo (Secção 1.0)
 
 console.log('11.0. Attaching event listeners to buttons...');
 
@@ -742,46 +1012,56 @@ if (btnToggleAnnotation) {
     console.error('!!! Erro 11.2: btnToggleAnnotation not found.');
 }
 
+// Botão UNDO (Desfazer)
+const btnUndo = document.getElementById('btn-undo'); // Garante que a referência é local
+if (btnUndo) {
+    console.log('11.3. Attaching listener to btnUndo (UNDO FUNCTION).');
+    btnUndo.addEventListener('click', undoLastAnnotation);
+} else {
+    console.error('!!! Erro 11.3: btnUndo not found in the DOM.');
+}
+
+
+// Botão BORRACHA
+const btnEraser = document.getElementById('btn-eraser');
+if (btnEraser) {
+    console.log('11.4. Attaching listener to btnEraser.');
+    btnEraser.addEventListener('click', toggleEraserMode);
+} else {
+    console.warn('!!! Aviso 11.4: btnEraser not found in the DOM.');
+}
+
 // Botões Salvar/Carregar Estado (Temporariamente Desativados)
 if (btnSaveState) {
-    console.log('11.3. Attaching listener to btnSaveState (Desativado).');
+    console.log('11.5. Attaching listener to btnSaveState (Desativado).');
     btnSaveState.addEventListener('click', saveState);
 } else {
-    console.error('!!! Erro 11.3: btnSaveState not found.');
+    console.error('!!! Erro 11.5: btnSaveState not found.');
 }
 
 if (btnLoadState) {
-    console.log('11.4. Attaching listener to btnLoadState (Desativado).');
+    console.log('11.6. Attaching listener to btnLoadState (Desativado).');
     btnLoadState.addEventListener('click', loadState);
 } else {
-    console.error('!!! Erro 11.4: btnLoadState not found.');
+    console.error('!!! Erro 11.6: btnLoadState not found.');
 }
-
-// <<< NOVO: Botão Desfazer (Undo) >>>
-if (btnUndo) {
-    console.log('11.5. Attaching listener to btnUndo.');
-    btnUndo.addEventListener('click', undoLastAnnotation);
-} else {
-    console.warn('!!! Aviso 11.5: btnUndo not found (Adicione ao HTML).');
-}
-// <<< FIM DO NOVO BOTÃO >>>
 
 // Botões do Modal
 if (modalBtnSave) {
-    console.log('11.6. Attaching listener to modalBtnSave.');
+    console.log('11.7. Attaching listener to modalBtnSave.');
     modalBtnSave.addEventListener('click', saveAnnotation);
 } else {
-    console.error('!!! Erro 11.6: modalBtnSave not found.');
+    console.error('!!! Erro 11.7: modalBtnSave not found.');
 }
 
 if (modalBtnCancel) {
-    console.log('11.7. Attaching listener to modalBtnCancel.');
+    console.log('11.8. Attaching listener to modalBtnCancel.');
     modalBtnCancel.addEventListener('click', hideAnnotationModal);
 } else {
-    console.error('!!! Erro 11.7: modalBtnCancel not found.');
+    console.error('!!! Erro 11.8: modalBtnCancel not found.');
 }
 
-console.log('11.8. Button listeners attached.');
+console.log('11.9. All button listeners attached.');
 
 
 // --- 12.0. Inicialização Final da Aplicação ---

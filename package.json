@@ -30,6 +30,7 @@
     "@electron-forge/plugin-fuses": "^7.10.2",
     "@electron-forge/plugin-webpack": "^7.10.2",
     "@electron/fuses": "^1.8.0",
+    "@types/three": "^0.180.0",
     "@vercel/webpack-asset-relocator-loader": "^1.7.3",
     "babel-loader": "^10.0.0",
     "copy-webpack-plugin": "^13.0.1",
@@ -43,6 +44,7 @@
     "@google/model-viewer": "^4.1.0",
     "electron-squirrel-startup": "^1.0.1",
     "fflate": "^0.8.2",
-    "three": "^0.172.0"
+    "three": "^0.172.0",
+    "three-line2": "^1.1.9"
   }
 }
