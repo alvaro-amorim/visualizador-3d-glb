@@ -1,135 +1,271 @@
 // C:\Users\Álvaro Amorim\app-3d-educativo\src\renderer.js
-// Versão: Completa com troca de clique simples/duplo para anotações
+// Estrutura Base Final da Fase 1: Three.js com Anotações Sprite e UX Avançada
 
-// Importa o CSS principal
+// --- 0.0. Importações de Módulos ---
 import './index.css';
-// Importa o componente model-viewer diretamente do node_modules
-import '../node_modules/@google/model-viewer/dist/model-viewer.js';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-// --- 1. Referências aos Elementos do DOM ---
-
-// Elemento principal do viewer 3D
-const modelViewer = document.getElementById('viewer');
-// Parágrafo para exibir mensagens de status
+// --- 1.0. Referências aos Elementos do DOM (HTML) ---
 const statusLog = document.querySelector('#status-log p');
-
-// Botões principais da interface
 const btnLoadFile = document.getElementById('btn-load-file');
 const btnToggleAnnotation = document.getElementById('btn-toggle-annotation');
 const btnSaveState = document.getElementById('btn-save-state');
 const btnLoadState = document.getElementById('btn-load-state');
+const canvasContainer = document.getElementById('threejs-canvas-container');
 
-// Elementos do Modal (pop-up) para adicionar/editar anotações
+// Elementos do Modal de Anotação (para inserção de texto)
 const modalBackdrop = document.getElementById('annotation-modal-backdrop');
 const modalBtnSave = document.getElementById('modal-btn-save');
 const modalBtnCancel = document.getElementById('modal-btn-cancel');
 const modalTitleInput = document.getElementById('annotation-title');
 const modalTextInput = document.getElementById('annotation-text');
 
-// --- 2. Variáveis de Estado Globais ---
 
-// Contador para gerar IDs únicos para novas anotações (hotspots)
-let hotspotCounter = 3;
-// Guarda dados temporários ao criar ou editar uma anotação.
-let currentAnnotationData = null;
-// Flag booleana que indica se o modo de anotação está ativo.
-let isAnnotationModeActive = false;
-// Guarda o URL do Blob do modelo carregado via ficheiro.
-let currentModelBlobUrl = null;
+// --- 2.0. Variáveis de Estado Globais e Three.js ---
 
-// --- 3. Funções Auxiliares ---
+// Variáveis Principais do Three.js
+let scene, camera, renderer, controls, loadedModel, pmremGenerator;
+const rgbeLoader = new RGBELoader();
+const gltfLoader = new GLTFLoader();
+
+// Variáveis de Estado da Aplicação
+let isAnnotationModeActive = false; // Controla se a criação/edição/remoção está ativa
+let annotationSprites = [];       // Array para guardar os objetos THREE.Sprite
+let currentAnnotationData = null; // Guarda dados temporários para criação/edição
+let currentModelBlobUrl = null;   // Guarda o URL do Blob para gestão de memória
+
+// Variáveis de Raycasting (para clique)
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+
+// --- 3.0. Funções Auxiliares Comuns ---
 
 /**
- * Atualiza o texto na barra de status da aplicação.
+ * 3.1. Atualiza o texto na barra de status da aplicação.
  * @param {string} message - A mensagem a ser exibida.
  */
 const updateStatus = (message) => {
-  if (message.startsWith('Status:') || message.startsWith('Erro:')) {
-    statusLog.textContent = message;
+  if (statusLog) {
+    statusLog.textContent = message.startsWith('Status:') || message.startsWith('Erro:') ? message : `Status: ${message}`;
   } else {
-    statusLog.textContent = `Status: ${message}`;
+    console.warn("Elemento statusLog não encontrado no DOM.");
   }
 };
 
-// --- 4. Funções Principais ---
+/**
+ * 3.2. Função auxiliar para converter Buffer (do Electron) para ArrayBuffer (para loaders).
+ * @param {Buffer} buf - O Buffer de entrada.
+ * @returns {ArrayBuffer} - O ArrayBuffer resultante.
+ */
+function toArrayBuffer(buf) {
+    const ab = new ArrayBuffer(buf.length);
+    const view = new Uint8Array(ab);
+    for (let i = 0; i < buf.length; ++i) {
+        view[i] = buf[i];
+    }
+    return ab;
+}
+
+
+// --- 4.0. Inicialização da Cena Three.js (Setup) ---
 
 /**
- * Carrega um modelo .glb selecionado pelo utilizador.
+ * 4.1. Configura a cena, câmara, renderer, controlos e inicia o loop principal.
+ */
+function initThreeJS() {
+  console.log('4.1. Initializing Three.js scene...');
+  try {
+    // 4.1.1. Configuração da Cena e Câmara
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a1a); 
+    const aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+    camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 1000);
+    camera.position.set(0, 1.6, 5); 
+    camera.lookAt(0, 0.8, 0);       
+
+    // 4.1.2. Configuração do Renderer (Desenho)
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; 
+    renderer.toneMappingExposure = 1.0; 
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    canvasContainer.appendChild(renderer.domElement);
+
+    // 4.1.3. Configuração do PMREM Generator e Controlos
+    pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+    
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0.8, 0); 
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.15; 
+    controls.rotateSpeed = 0.25; 
+    
+    // <<< TROCA DE BOTÕES: Rotação no Botão Direito >>>
+    // Rotação: Botão Direito (THREE.MOUSE.RIGHT)
+    controls.mouseButtons = {
+        LEFT: THREE.MOUSE.PAN,      // Clique Esquerdo (Agora Pan/Arrastar lateral)
+        MIDDLE: THREE.MOUSE.DOLLY,  // Scroll (Zoom, que desativamos para usar a roda)
+        RIGHT: THREE.MOUSE.ROTATE   // Botão Direito (Agora Rotação/Órbita)
+    };
+    // <<< FIM DA TROCA >>>
+
+    controls.screenSpacePanning = true; 
+    controls.enableZoom = false; 
+    controls.minDistance = 0.5;
+    controls.maxDistance = 15;
+    controls.update();
+
+    // 4.1.4. Configuração das Luzes
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    directionalLight.position.set(5, 5, 5);
+    scene.add(directionalLight);
+
+    // 4.1.5. Adiciona Listeners
+    window.addEventListener('resize', onWindowResize);
+    renderer.domElement.addEventListener('click', onClick);
+    renderer.domElement.addEventListener('dblclick', onDoubleClick);
+    renderer.domElement.addEventListener('wheel', onWheel, { passive: false }); 
+    renderer.domElement.addEventListener('mousedown', onMouseDown, false); 
+    window.addEventListener('mouseup', onMouseUp, false); // MouseUp global
+    
+    animate();
+    updateStatus('Cena 3D inicializada. Carregue um modelo.');
+
+  } catch(error) {
+      console.error("!!! Erro fatal na inicialização do Three.js:", error);
+      updateStatus("Erro: Falha ao inicializar a cena 3D.");
+  }
+}
+
+// --- 5.0. Funções de Controlo e Visualização ---
+
+/**
+ * 5.1. Função do Loop de Renderização Principal (Game Loop).
+ */
+function animate() {
+  if (!renderer) return;
+  requestAnimationFrame(animate);
+  controls.update(); 
+  renderer.render(scene, camera);
+}
+
+/**
+ * 5.2. Ajusta a câmara e o renderer quando a janela é redimensionada.
+ */
+function onWindowResize() {
+  if (!camera || !renderer || !canvasContainer) return;
+  const width = canvasContainer.clientWidth;
+  const height = canvasContainer.clientHeight;
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
+}
+
+
+// --- 6.0. Funções de Carregamento de Recursos ---
+
+/**
+ * 6.1. Carrega um modelo .glb selecionado pelo utilizador.
  */
 const loadModelFromFile = async () => {
-  console.log('--- loadModelFromFile function called ---');
+  console.log('6.1. loadModelFromFile called.');
+  if (!scene || !gltfLoader || !window.electronAPI) {
+      updateStatus("Erro: Cena 3D ou API não inicializada."); return;
+  }
   try {
     updateStatus('A abrir janela de seleção...');
-    console.log('Calling window.electronAPI.openFile()...');
     const fileDataBuffer = await window.electronAPI.openFile();
+    if (!fileDataBuffer) { updateStatus('Seleção cancelada.'); return; }
+    updateStatus('Ficheiro recebido. A carregar modelo...');
 
-    if (!fileDataBuffer) {
-      updateStatus('Seleção cancelada ou erro ao ler o ficheiro.');
-      console.log('File selection canceled or read error.');
-      return;
-    }
+    // Limpa cena anterior
+    if (loadedModel) scene.remove(loadedModel);
+    annotationSprites.forEach(sprite => scene.remove(sprite));
+    annotationSprites = []; 
 
-    console.log('File data received (Buffer). Converting to Blob...');
-    const blob = new Blob([fileDataBuffer], { type: 'model/gltf-binary' });
-    const objectURL = URL.createObjectURL(blob);
-    console.log('Blob URL created:', objectURL);
-
-    if (currentModelBlobUrl) {
-      console.log('Revoking old Blob URL:', currentModelBlobUrl);
-      URL.revokeObjectURL(currentModelBlobUrl);
-    }
-    currentModelBlobUrl = objectURL;
-
-    console.log('Setting modelViewer.src and environmentImage...');
-    modelViewer.src = objectURL;
-    modelViewer.environmentImage = '/assets/environment.hdr';
-    updateStatus('Modelo a carregar...');
+    // Tenta carregar o GLB a partir do Buffer
+    gltfLoader.parse(toArrayBuffer(fileDataBuffer), '', (gltf) => {
+      loadedModel = gltf.scene;
+      console.log('GLB parsed successfully. Adding model to scene.');
+      scene.add(loadedModel);
+      updateStatus('Modelo carregado! A carregar ambiente...');
+      loadEnvironment('/assets/environment.hdr'); // Carrega ambiente padrão
+    }, (error) => {
+      console.error('!!! Erro ao processar GLB:', error);
+      updateStatus('Erro ao processar o ficheiro GLB.');
+    });
 
   } catch (error) {
-    console.error('!!! Error inside loadModelFromFile:', error);
-    updateStatus(`Erro ao carregar ficheiro: ${error.message}`);
+    console.error('!!! Erro interno em loadModelFromFile:', error);
+    updateStatus(`Erro inesperado ao carregar ficheiro: ${error.message}`);
   }
 };
 
 /**
- * Ativa ou desativa o modo de anotação e mostra/esconde hotspots.
+ * 6.2. Carrega e aplica um mapa de ambiente HDR.
+ * @param {string} url - O caminho para o ficheiro .hdr.
+ */
+function loadEnvironment(url) {
+  console.log('6.2. Loading environment map:', url);
+  if (!scene || !pmremGenerator || !rgbeLoader) {
+     updateStatus("Erro: Cena não pronta para carregar ambiente."); return;
+  }
+  rgbeLoader.load(url, (texture) => {
+    const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+    pmremGenerator.dispose();
+    texture.dispose();
+    scene.environment = envMap; 
+    updateStatus('Modelo e ambiente carregados com sucesso!');
+    console.log('Environment map applied.');
+  }, undefined, (error) => {
+    console.error(`!!! Erro ao carregar ambiente HDR de ${url}:`, error);
+    updateStatus('Modelo carregado, mas erro ao carregar ambiente.');
+  });
+}
+
+
+// --- 7.0. Funções de Gestão de Anotação (UI/Modal) ---
+
+/**
+ * 7.1. Ativa ou desativa o modo de anotação e controla a visibilidade dos sprites.
  */
 const toggleAnnotations = () => {
   isAnnotationModeActive = !isAnnotationModeActive;
-  console.log('Annotation mode toggled. New state:', isAnnotationModeActive);
+  console.log('7.1. Annotation mode toggled. New state:', isAnnotationModeActive);
 
-  const allAnnotations = modelViewer.querySelectorAll('div[slot^="hotspot-"]');
-  allAnnotations.forEach((spot) => {
-    spot.classList.toggle('annotation-visible', isAnnotationModeActive);
+  annotationSprites.forEach(sprite => {
+      sprite.visible = isAnnotationModeActive;
   });
 
-  updateStatus(isAnnotationModeActive ? 'Modo de Anotação ATIVADO. Clique DUPLO no modelo para adicionar notas. Clique simples para editar/apagar.' : 'Modo de Anotação DESATIVADO.');
+  updateStatus(isAnnotationModeActive ? 'Modo de Anotação ATIVADO. Clique DUPLO no modelo para adicionar notas. Clique simples para apagar/editar.' : 'Modo de Anotação DESATIVADO.');
 };
 
 /**
- * Mostra o modal para adicionar ou editar uma anotação.
- * @param {object | null} data - Dados para criação ({position, normal}) ou edição ({elementToEdit}).
+ * 7.2. Mostra o modal HTML para inserir dados da anotação.
+ * @param {object} data - Contém o ponto 3D: {point: THREE.Vector3} para criação.
  */
 const showAnnotationModal = (data) => {
-  console.log('Showing modal for:', data);
-  currentAnnotationData = data;
-  if (data && data.elementToEdit) {
-    const titleEl = data.elementToEdit.querySelector('h3');
-    const textEl = data.elementToEdit.querySelector('p');
-    modalTitleInput.value = titleEl ? titleEl.innerText : '';
-    modalTextInput.value = textEl ? textEl.innerText : '';
-    modalBackdrop.querySelector('h2').innerText = "Editar Anotação";
-  } else {
-    modalTitleInput.value = '';
-    modalTextInput.value = '';
-    modalBackdrop.querySelector('h2').innerText = "Adicionar Anotação";
-  }
+  console.log('7.2. Showing modal for creation/editing.');
+  currentAnnotationData = data; // Guarda o ponto 3D
+  
+  // Limpa e configura o modal para criação (Modo Edição não implementado)
+  modalTitleInput.value = '';
+  modalTextInput.value = '';
+  modalBackdrop.querySelector('h2').innerText = "Adicionar Anotação";
+  
   modalBackdrop.classList.remove('modal-hidden');
   modalTitleInput.focus();
 };
 
 /**
- * Esconde o modal de anotação.
+ * 7.3. Esconde o modal HTML.
  */
 const hideAnnotationModal = () => {
   currentAnnotationData = null;
@@ -137,236 +273,502 @@ const hideAnnotationModal = () => {
 };
 
 /**
- * Prepara para editar uma anotação existente.
- * @param {HTMLElement} hotspotElement - O elemento da anotação clicada.
- */
-const startEditAnnotation = (hotspotElement) => {
-  showAnnotationModal({ elementToEdit: hotspotElement });
-};
-
-/**
- * Cria uma nova anotação ou atualiza uma existente (chamada pelo modal).
+ * 7.4. Cria um Sprite do Three.js com texto e o adiciona à cena.
+ * Esta função é chamada pelo botão 'Salvar' do modal.
  */
 const saveAnnotation = () => {
-  if (!currentAnnotationData) return;
+  if (!currentAnnotationData || !currentAnnotationData.point) {
+      console.warn("7.4. Save clicked but no 3D point data available.");
+      hideAnnotationModal(); return;
+  }
   const title = modalTitleInput.value.trim();
   const text = modalTextInput.value.trim();
   if (!title) { alert("Por favor, insira um título."); return; }
 
-  if (currentAnnotationData.elementToEdit) {
-    // Modo Edição
-    const element = currentAnnotationData.elementToEdit;
-    const titleEl = element.querySelector('h3');
-    const textEl = element.querySelector('p');
-    if (titleEl) titleEl.innerText = title;
-    if (textEl) {
-        if (text) textEl.innerText = text;
-        else textEl.remove();
-    } else if (text) {
-        const newTextEl = document.createElement('p');
-        newTextEl.innerText = text;
-        element.appendChild(newTextEl);
-    }
-    updateStatus(`Anotação "${title}" atualizada!`);
-  } else {
-    // Modo Criação
-    const { position, normal } = currentAnnotationData;
-    const newHotspot = document.createElement('div');
-    newHotspot.slot = `hotspot-${hotspotCounter}`;
-    newHotspot.dataset.position = `${position.x} ${position.y} ${position.z}`;
-    newHotspot.dataset.normal = `${normal.x} ${normal.y} ${normal.z}`;
-    newHotspot.innerHTML = `
-      <button class="delete-btn">X</button>
-      <h3>${title}</h3>
-      ${text ? `<p>${text}</p>` : ''}
-    `;
-    newHotspot.classList.add('annotation-visible');
-    modelViewer.appendChild(newHotspot);
-    hotspotCounter++;
-    updateStatus(`Anotação "${title}" criada!`);
-  }
+  // 7.4.1. Chama a função que cria o objeto visual no Three.js
+  createAnnotationSprite(currentAnnotationData.point, title, text);
   hideAnnotationModal();
 };
 
+// --- 8.0. Funções de Renderização e Criação de Sprite ---
+
 /**
- * Salva o estado (câmara + anotações) no localStorage.
+ * 8.1. Cria um Sprite do Three.js com texto e o adiciona à cena.
+ * @param {THREE.Vector3} position - A posição 3D onde colocar o sprite.
+ * @param {string} title - O título da anotação.
+ * @param {string} text - O texto da anotação.
  */
+function createAnnotationSprite(position, title, text) {
+  console.log(`8.1. Creating sprite at ${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}.`);
+   if (!scene) { updateStatus("Erro: Cena não inicializada."); return; }
+
+  // 8.1.1. Configuração e Desenho do Canvas (Textura)
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  const fontSize = 16;
+  const padding = 10;
+  context.font = `bold ${fontSize}px Arial`;
+  const titleWidth = context.measureText(title).width;
+  context.font = `${fontSize}px Arial`;
+  const textLines = text.split('\n');
+  let textWidth = 0;
+  textLines.forEach(line => { textWidth = Math.max(textWidth, context.measureText(line).width); });
+  const maxWidth = Math.max(titleWidth, textWidth);
+  const lineSpacing = 5;
+  const canvasWidth = maxWidth + padding * 2;
+  const canvasHeight = fontSize * (1 + textLines.length) + padding * 2 + (lineSpacing * textLines.length);
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  context.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  context.fillRect(0, 0, canvasWidth, canvasHeight);
+  context.fillStyle = 'white';
+  context.font = `bold ${fontSize}px Arial`;
+  context.fillText(title, padding, padding + fontSize);
+  context.font = `${fontSize}px Arial`;
+  let yPos = padding + fontSize * 2 + lineSpacing;
+  textLines.forEach(line => { context.fillText(line, padding, yPos); yPos += fontSize + lineSpacing; });
+
+  // 8.1.2. Criação do Objeto Sprite
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    sizeAttenuation: true, // Sprite diminui/aumenta com o zoom (Comportamento 3D correto)
+    // <<< CORREÇÃO DE PROFUNDIDADE >>>
+    depthTest: false, // DESLIGA o teste de profundidade (Sprite sempre visível, não fica "dentro" do corpo)
+    renderOrder: 100 // Garante que é desenhado DEPOIS dos outros objetos da cena
+    // <<< FIM DA CORREÇÃO >>>
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.position.copy(position);
+
+  // 8.1.3. Define Escala (em Unidades do Mundo 3D)
+  const worldScaleBase = 0.2; 
+  sprite.scale.set(worldScaleBase, worldScaleBase * (canvasHeight / canvasWidth), 1.0);
+
+  // 8.1.4. Guarda dados e adiciona à cena
+  sprite.userData = { 
+      isAnnotation: true, // Identificador
+      title: title, 
+      text: text,
+      position: position
+  };
+  scene.add(sprite);
+  annotationSprites.push(sprite);
+  updateStatus(`Anotação "${title}" criada!`);
+}
+
+// --- 9.0. Funções de Salvar/Carregar Estado (TODO: Reimplementar) ---
+// Estas funções serão implementadas para a gestão do estado 3D.
+
 const saveState = () => {
-  console.log('--- saveState function called ---');
-  try {
-    const orbit = modelViewer.getCameraOrbit();
-    const annotationsData = [];
-    const annotationElements = modelViewer.querySelectorAll('div[slot^="hotspot-"]');
-    console.log(`Found ${annotationElements.length} annotations to save.`);
-    annotationElements.forEach((spot) => {
-      const titleEl = spot.querySelector('h3');
-      const textEl = spot.querySelector('p');
-      annotationsData.push({
-        slot: spot.slot,
-        position: spot.dataset.position,
-        normal: spot.dataset.normal,
-        title: titleEl ? titleEl.innerText : '',
-        text: textEl ? textEl.innerText : '',
-      });
-    });
-    const state = {
-      cameraOrbit: orbit.toString(),
-      fieldOfView: modelViewer.getFieldOfView(),
-      annotations: annotationsData,
-    };
-    console.log('Saving state:', JSON.stringify(state, null, 2));
-    localStorage.setItem('modelViewerState', JSON.stringify(state));
-    updateStatus('Estado (Câmara + Anotações) salvo!');
-  } catch (error) {
-    console.error('!!! Error inside saveState:', error);
-    updateStatus(`Erro ao salvar: ${error.message}`);
-  }
+    // 9.1. TODO: Implementar salvamento dos sprites (posição, texto) e estado da câmara/controlo.
+    console.log("9.1. Save state needs reimplementation for Three.js.");
+    updateStatus('Funcionalidade Salvar Estado precisa ser implementada.');
 };
-
-/**
- * Carrega o estado (câmara + anotações) do localStorage.
- */
 const loadState = () => {
-  console.log('--- loadState function called ---');
-  try {
-    const savedStateJSON = localStorage.getItem('modelViewerState');
-    if (!savedStateJSON) {
-      updateStatus('Nenhum estado salvo encontrado.');
-      console.log('No saved state found in localStorage.');
-      return;
-    }
-    console.log('Found saved state JSON:', savedStateJSON);
-    const savedState = JSON.parse(savedStateJSON);
-    console.log('Parsed saved state:', savedState);
-
-    if (savedState.cameraOrbit) modelViewer.cameraOrbit = savedState.cameraOrbit;
-    if (savedState.fieldOfView) modelViewer.fieldOfView = savedState.fieldOfView;
-
-    const oldAnnotations = modelViewer.querySelectorAll('div[slot^="hotspot-"]');
-    console.log(`Removing ${oldAnnotations.length} old annotations before loading.`);
-    oldAnnotations.forEach(spot => spot.remove());
-
-    let maxId = 0;
-    if (savedState.annotations && Array.isArray(savedState.annotations)) {
-      console.log(`Recreating ${savedState.annotations.length} annotations...`);
-      savedState.annotations.forEach(data => {
-        if (!data.slot || !data.position) {
-            console.warn('Skipping invalid annotation data:', data);
-            return;
-        }
-        const newHotspot = document.createElement('div');
-        newHotspot.slot = data.slot;
-        newHotspot.dataset.position = data.position;
-        if (data.normal) newHotspot.dataset.normal = data.normal;
-        newHotspot.innerHTML = `
-          <button class="delete-btn">X</button>
-          <h3>${data.title || 'Sem Título'}</h3>
-          ${data.text ? `<p>${data.text}</p>` : ''}
-        `;
-        if (isAnnotationModeActive) {
-          newHotspot.classList.add('annotation-visible');
-        }
-        modelViewer.appendChild(newHotspot);
-        try {
-          const id = parseInt(data.slot.replace('hotspot-', ''), 10);
-          if (!isNaN(id) && id > maxId) { maxId = id; }
-        } catch (e) { /* Ignora */ }
-      });
-    } else {
-        console.log('No annotations found in saved state.');
-    }
-
-    hotspotCounter = maxId + 1;
-    console.log('Hotspot counter reset to:', hotspotCounter);
-    updateStatus('Estado (Câmara + Anotações) carregado!');
-  } catch (error) {
-    console.error('!!! Error inside loadState:', error);
-    updateStatus(`Erro ao carregar: ${error.message}`);
-  }
+    // 9.2. TODO: Implementar carregamento dos sprites e estado da câmara/controlo.
+    console.log("9.2. Load state needs reimplementation for Three.js.");
+    updateStatus('Funcionalidade Carregar Estado precisa ser implementada.');
 };
 
-// --- 5. Adicionar "Ouvintes" de Eventos ---
 
-// Liga botões da App
-console.log('Attaching event listeners to buttons...');
-if (btnLoadFile) btnLoadFile.addEventListener('click', loadModelFromFile);
-else console.error('!!! btnLoadFile not found');
-if (btnToggleAnnotation) btnToggleAnnotation.addEventListener('click', toggleAnnotations);
-else console.error('!!! btnToggleAnnotation not found');
-if (btnSaveState) btnSaveState.addEventListener('click', saveState);
-else console.error('!!! btnSaveState not found');
-if (btnLoadState) btnLoadState.addEventListener('click', loadState);
-else console.error('!!! btnLoadState not found');
+// --- 10.0. Ouvintes de Eventos do Canvas (Interação 3D) ---
 
-// Liga botões do Modal
-if (modalBtnSave) modalBtnSave.addEventListener('click', saveAnnotation);
-else console.error('!!! modalBtnSave not found');
-if (modalBtnCancel) modalBtnCancel.addEventListener('click', hideAnnotationModal);
-else console.error('!!! modalBtnCancel not found');
-console.log('Button listeners attached.');
+// 10.0.1. Variáveis de estado do Desenho Livre
+let isDrawing = false;      // Flag que indica se o rato está a ser arrastado
+let currentDrawingLine = null; // O objeto THREE.Line atual a ser desenhado
+let drawingPoints = [];     // Array para guardar os pontos 3D da linha atual
+let drawingPlane = null;    // Plano virtual para traçado no ar
+let lastIntersectionDistance = 5; // Distância do último ponto traçado ao modelo
+
+// 10.0.2. Lógica para traçar a linha em tempo real
+function onMouseMove(event) {
+    if (!isDrawing) return; 
+
+    // 1. Calcular coordenadas normalizadas do rato
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    // 2. Traçar no Modelo (Prioritário)
+    const modelIntersects = loadedModel ? raycaster.intersectObject(loadedModel, true) : [];
+
+    let intersectionPoint = null;
+
+    if (modelIntersects.length > 0) {
+        // Opção A: Clicou no Modelo (Traçado na Superfície)
+        const intersection = modelIntersects[0];
+        intersectionPoint = intersection.point;
+        
+        lastIntersectionDistance = intersection.distance;
+
+        if (drawingPlane) {
+            drawingPlane.position.copy(intersectionPoint);
+            drawingPlane.lookAt(camera.position); 
+        }
+
+    } else {
+        // Opção B: Clicou no Ar (Traçado no Plano Virtual)
+        
+        if (!drawingPlane) return; 
+        const planeIntersects = raycaster.intersectObjects([drawingPlane]); 
+        
+        if (planeIntersects.length > 0) {
+            intersectionPoint = planeIntersects[0].point;
+        }
+    }
+
+    // 3. Se um ponto válido foi encontrado, processa o traçado
+    if (intersectionPoint) {
+        
+        if (drawingPoints.length > 0) {
+            const lastPoint = drawingPoints[drawingPoints.length - 1];
+            if (lastPoint.distanceTo(intersectionPoint) < 0.005) return; 
+        }
+
+        // 4. Adiciona o ponto e atualiza a geometria da linha
+        drawingPoints.push(intersectionPoint.clone());
+        
+        if (currentDrawingLine) {
+            const positions = new Float32Array(drawingPoints.length * 3);
+            for (let i = 0; i < drawingPoints.length; i++) {
+                positions[i * 3] = drawingPoints[i].x;
+                positions[i * 3 + 1] = drawingPoints[i].y;
+                positions[i * 3 + 2] = drawingPoints[i].z;
+            }
+            currentDrawingLine.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            currentDrawingLine.geometry.attributes.position.needsUpdate = true;
+            currentDrawingLine.geometry.setDrawRange(0, drawingPoints.length);
+        }
+    }
+}
+
+// 10.0.3. Iniciar o Desenho (Mouse Down)
+function onMouseDown(event) {
+    // 1. Verifica se o modo de anotação está ativo e se o clique foi no botão esquerdo (0)
+    if (!isAnnotationModeActive || event.button !== 0) return;
+
+    // 2. Configura Raycaster na posição do rato
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    const modelIntersects = loadedModel ? raycaster.intersectObject(loadedModel, true) : [];
+
+    // 3. Verifica se tem um desenho em curso para continuar
+    if (currentDrawingLine) {
+         console.log('10.0.3. Desenho Livre continuado.');
+         isDrawing = true;
+    } 
+    // <<< CORREÇÃO: Inicia o desenho se o modo estiver ativo, independentemente de atingir o modelo >>>
+    else {
+        // Se for um novo desenho, inicia se o modo estiver ativo
+        console.log('10.0.3. Novo Desenho Livre iniciado.');
+        isDrawing = true;
+        drawingPoints = []; 
+        
+        // 4. Cria o objeto THREE.Line inicial
+        const material = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 5, depthTest: false }); 
+        const geometry = new THREE.BufferGeometry();
+        geometry.setDrawRange(0, 0); 
+        currentDrawingLine = new THREE.Line(geometry, material);
+        currentDrawingLine.userData = { isAnnotation: true, title: "Desenho Livre" };
+        scene.add(currentDrawingLine);
+        
+        // 5. Cria/Atualiza o Plano Virtual de Traçado (Usando a última distância conhecida ou uma distância padrão)
+        
+        // Calcula o ponto inicial para o plano: ponto no modelo OU no ar
+        let initialPoint;
+        if (modelIntersects.length > 0) {
+            initialPoint = modelIntersects[0].point.clone();
+            lastIntersectionDistance = modelIntersects[0].distance; // Atualiza a distância
+        } else {
+            // Se não acertou no modelo, projeta o ponto do cursor na profundidade conhecida (lastIntersectionDistance)
+            const projectedVector = new THREE.Vector3(mouse.x, mouse.y, 0.5); // 0.5 é a profundidade do clipping
+            projectedVector.unproject(camera); // Converte coordenadas do ecrã para coordenadas do mundo
+            
+            // Move o ponto para a distância conhecida
+            const direction = new THREE.Vector3().subVectors(projectedVector, camera.position).normalize();
+            initialPoint = camera.position.clone().add(direction.multiplyScalar(lastIntersectionDistance));
+        }
 
 
-// --- 6. Ouvintes de Eventos do Model-Viewer ---
+        if (!drawingPlane) {
+            const planeGeometry = new THREE.PlaneGeometry(50, 50); 
+            const planeMaterial = new THREE.MeshBasicMaterial({ visible: false }); 
+            drawingPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+            scene.add(drawingPlane);
+        }
+        
+        drawingPlane.position.copy(initialPoint);
+        drawingPlane.lookAt(camera.position); 
+        
+        // 6. Adiciona o ponto inicial à linha
+        drawingPoints.push(initialPoint.clone());
 
-// Eventos 'load' e 'error'
-modelViewer.addEventListener('load', () => { updateStatus('Modelo carregado com sucesso!'); });
-modelViewer.addEventListener('error', (event) => { console.error('Error loading model:', event); updateStatus('Erro: Falha ao carregar modelo.'); });
+        // 7. Adiciona o ouvinte de MouseMove e desativa os OrbitControls
+        renderer.domElement.addEventListener('mousemove', onMouseMove, false);
+        controls.enabled = false;
+    }
+}
+
+// 10.0.4. Finalizar o Desenho (Mouse Up)
+function onMouseUp(event) {
+    if (!isDrawing) return;
+
+    console.log('10.0.4. Desenho Livre finalizado. Total de pontos:', drawingPoints.length);
+    isDrawing = false;
+    
+    // Remove o ouvinte de MouseMove
+    renderer.domElement.removeEventListener('mousemove', onMouseMove, false);
+    
+    // Reativa os OrbitControls
+    controls.enabled = true;
+
+    // Limpa o Plano Virtual (pois o traçado terminou)
+    if (drawingPlane) {
+        scene.remove(drawingPlane);
+        // Não removemos o plano da memória (drawingPlane = null)
+        // O plano será substituído no próximo onMouseDown, economizando a alocação de memória
+    }
+
+    // Se a linha for válida, adiciona-a ao array de gestão
+    if (drawingPoints.length > 1) {
+        annotationSprites.push(currentDrawingLine); 
+        updateStatus(`Desenho Livre concluído com ${drawingPoints.length} pontos.`);
+    } else if (currentDrawingLine) {
+        // Linha muito curta, remove-a e o seu material/geometria
+        scene.remove(currentDrawingLine);
+        currentDrawingLine.geometry.dispose();
+        currentDrawingLine.material.dispose();
+        currentDrawingLine = null;
+        updateStatus('Desenho muito curto removido.');
+    }
+    
+    currentDrawingLine = null; // Limpa a linha atual
+}
+
 
 /**
- * <<< OUVINTE DE CLIQUE MODIFICADO: Só trata de APAGAR ou EDITAR >>>
+ * 10.1. Função chamada no evento de clique simples no canvas.
+ * Responsável por Menu de Ação/Apagar Anotações ou Mover o Foco (Target-on-Click).
  */
-modelViewer.addEventListener('click', (event) => {
-  console.log('--- Single Click Detected --- Target:', event.target);
-  const clickedHotspot = event.target.closest('div[slot^="hotspot-"]');
-  console.log('Clicked hotspot element:', clickedHotspot);
+function onClick(event) {
+    // Se o mouse up aconteceu, mas o evento de click disparou, ignora
+    if (controls.enabled === false) return; 
+    
+    console.log('10.1. Single Click Detected.');
 
-  // --- LÓGICA DE APAGAR ---
-  if (event.target.classList.contains('delete-btn') && clickedHotspot) {
-    console.log('Attempting DELETE:', clickedHotspot.slot);
-    clickedHotspot.remove();
-    updateStatus('Anotação removida.');
-    return;
-  }
+    // 10.1.1. Lógica de Raycasting
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
 
-  // --- LÓGICA DE EDITAR ---
-  if (clickedHotspot && isAnnotationModeActive) {
-    console.log('Attempting EDIT:', clickedHotspot.slot);
-    startEditAnnotation(clickedHotspot);
-    return;
-  }
+    // 10.1.2. Lógica de AÇÃO NA ANOTAÇÃO (Menu de Contexto/Apagar)
+    if (isAnnotationModeActive && annotationSprites.length > 0) {
+        const intersects = raycaster.intersectObjects(annotationSprites);
 
-  // Se não foi apagar nem editar, permite a interação normal da câmara.
-  console.log('Single click allows camera interaction.');
-});
+        if (intersects.length > 0) {
+            const clickedObject = intersects[0].object;
+
+            if (clickedObject.userData.isAnnotation || clickedObject.type === 'Line') {
+                const title = clickedObject.userData.title || "Desenho Livre";
+                const confirmDelete = confirm(`Deseja APAGAR a anotação/desenho "${title}"?`);
+
+                if (confirmDelete) {
+                    scene.remove(clickedObject);
+                    annotationSprites = annotationSprites.filter(obj => obj !== clickedObject);
+                    // Limpeza de memória
+                    if (clickedObject.geometry) clickedObject.geometry.dispose();
+                    if (clickedObject.material) clickedObject.material.dispose();
+                    if (clickedObject.material.map) clickedObject.material.map.dispose();
+
+                    updateStatus(`Anotação/Desenho "${title}" removida.`);
+                }
+                event.stopPropagation(); 
+                return; // Finaliza o clique
+            }
+        }
+    }
+
+    // 10.1.3. Lógica de MOVER FOCO (Target-on-Click)
+    if (loadedModel) {
+        const intersects = raycaster.intersectObject(loadedModel, true);
+
+        if (intersects.length > 0) {
+            const newTarget = intersects[0].point;
+            controls.target.copy(newTarget);
+            controls.update();
+            updateStatus(`Foco da câmara movido para o ponto clicado.`);
+        }
+    }
+}
 
 
 /**
- * <<< OUVINTE DE CLIQUE-DUPLO MODIFICADO: Agora trata de CRIAR anotações >>>
+ * 10.2. Função chamada no evento de clique duplo no canvas.
+ * Responsável por iniciar a criação de anotações DE TEXTO.
  */
-modelViewer.addEventListener('dblclick', (event) => {
-  console.log('--- Double Click Detected --- Annotation mode:', isAnnotationModeActive);
+function onDoubleClick(event) {
+  console.log('10.2. Double Click Detected. Mode:', isAnnotationModeActive);
+  if (!isAnnotationModeActive || !loadedModel || !camera || !renderer) return;
 
-  // --- LÓGICA DE CRIAR ---
-  // Só cria se o modo de anotação estiver ativo
-  if (!isAnnotationModeActive) {
-    console.log('Annotation mode OFF. Ignoring double click.');
-    return;
-  }
+  console.log('Attempting CREATE TEXT via double click. Raycasting model...');
+  
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
 
-  console.log('Attempting CREATE via double click. Raycasting...');
-  const positionAndNormal = modelViewer.positionAndNormalFromPoint(
-    event.clientX,
-    event.clientY
-  );
-  console.log('Raycast result:', positionAndNormal);
+  const intersects = raycaster.intersectObject(loadedModel, true);
 
-  // Se o raycast atingiu o modelo
-  if (positionAndNormal) {
-    // Mostra o modal para o utilizador inserir os dados
-    showAnnotationModal({ position: positionAndNormal.position, normal: positionAndNormal.normal });
+  if (intersects.length > 0) {
+    const intersectionPoint = intersects[0].point;
+    
+    controls.target.copy(intersectionPoint);
+    controls.update();
+
+    console.log('Intersection point on model:', intersectionPoint);
+    showAnnotationModal({ point: intersectionPoint }); // Chama o modal de TEXTO
   } else {
     console.log('Raycast missed model.');
+    updateStatus('Clique duplo não atingiu o modelo.');
   }
-});
+}
 
-// --- FIM DO CÓDIGO ---
+/**
+ * 10.3. Função chamada no evento de roda do rato (wheel).
+ * Responsável pelo Zoom Direcional (Zoom-to-Mouse).
+ */
+function onWheel(event) {
+    event.preventDefault(); 
+    const delta = event.deltaY > 0 ? 1 : -1; 
+    const zoomSpeed = 0.15; 
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    let focusPoint = controls.target.clone();
+    
+    if (loadedModel) {
+        const intersects = raycaster.intersectObject(loadedModel, true);
+        if (intersects.length > 0) {
+            focusPoint = intersects[0].point; 
+        }
+    }
+
+    const vector = new THREE.Vector3();
+    camera.getWorldDirection(vector); 
+    vector.multiplyScalar(delta * zoomSpeed); 
+
+    controls.target.sub(vector);
+    camera.position.sub(vector);
+
+    controls.update();
+}
+
+/**
+ * 10.4. Menu de Contexto (Botão Direito) para Apagar/Editar
+ */
+function onContextMenu(event) {
+    event.preventDefault(); // Impede o menu de contexto padrão do navegador
+
+    console.log('10.4. Context Menu (Right Click) Detected.');
+    if (!isAnnotationModeActive || annotationSprites.length === 0) return;
+
+    // 1. Configura Raycaster na posição do rato
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+
+    // 2. Verifica interseções com TODOS os objetos de anotação
+    const intersects = raycaster.intersectObjects(annotationSprites);
+
+    if (intersects.length > 0) {
+        const clickedObject = intersects[0].object;
+
+        if (clickedObject.userData.isAnnotation || clickedObject.type === 'Line') {
+            const title = clickedObject.userData.title || "Desenho Livre";
+            const action = prompt(`Ação para "${title}"\n\nDigite:\n1: Editar (Não implementado)\n2: Apagar\n\n(Cancele ou feche para sair)`, "2");
+
+            if (action === '2') {
+                scene.remove(clickedObject);
+                annotationSprites = annotationSprites.filter(obj => obj !== clickedObject);
+                // Limpeza de memória
+                if (clickedObject.geometry) clickedObject.geometry.dispose();
+                if (clickedObject.material) clickedObject.material.dispose();
+                if (clickedObject.material.map) clickedObject.material.map.dispose();
+                updateStatus(`Anotação/Desenho "${title}" removida.`);
+            } else if (action === '1') {
+                 updateStatus(`Edição da anotação "${title}" solicitada. Funcionalidade a ser implementada.`);
+            }
+            return; // Finaliza o contexto
+        }
+    }
+}
+
+
+// --- 11.0. Adicionar "Ouvintes" de Eventos (Ligações de Botões) ---
+
+console.log('11.0. Attaching event listeners to buttons...');
+
+// Botão Carregar Ficheiro
+if (btnLoadFile) {
+    console.log('11.1. Attaching listener to btnLoadFile.');
+    btnLoadFile.addEventListener('click', loadModelFromFile);
+} else {
+    console.error('!!! Erro 11.1: btnLoadFile not found in the DOM.');
+}
+
+// Botão Ativar Anotação
+if (btnToggleAnnotation) {
+    console.log('11.2. Attaching listener to btnToggleAnnotation.');
+    btnToggleAnnotation.addEventListener('click', toggleAnnotations);
+} else {
+    console.error('!!! Erro 11.2: btnToggleAnnotation not found.');
+}
+
+// Botões Salvar/Carregar Estado (Temporariamente Desativados)
+if (btnSaveState) {
+    console.log('11.3. Attaching listener to btnSaveState (Desativado).');
+    btnSaveState.addEventListener('click', saveState);
+} else {
+    console.error('!!! Erro 11.3: btnSaveState not found.');
+}
+
+if (btnLoadState) {
+    console.log('11.4. Attaching listener to btnLoadState (Desativado).');
+    btnLoadState.addEventListener('click', loadState);
+} else {
+    console.error('!!! Erro 11.4: btnLoadState not found.');
+}
+
+// Botões do Modal
+if (modalBtnSave) {
+    console.log('11.5. Attaching listener to modalBtnSave.');
+    modalBtnSave.addEventListener('click', saveAnnotation);
+} else {
+    console.error('!!! Erro 11.5: modalBtnSave not found.');
+}
+
+if (modalBtnCancel) {
+    console.log('11.6. Attaching listener to modalBtnCancel.');
+    modalBtnCancel.addEventListener('click', hideAnnotationModal);
+} else {
+    console.error('!!! Erro 11.6: modalBtnCancel not found.');
+}
+
+console.log('11.7. Button listeners attached.');
+
+
+// --- 12.0. Inicialização Final da Aplicação ---
+// Chama a função principal de inicialização
+initThreeJS();

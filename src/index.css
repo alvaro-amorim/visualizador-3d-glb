@@ -211,3 +211,19 @@ model-viewer {
 #modal-btn-cancel:hover {
   background-color: #5a6268;
 }
+/* Garante que o container do canvas ocupa a coluna */
+#threejs-canvas-container {
+  width: 100%;
+  height: 100%;
+  overflow: hidden; /* Garante que o canvas não transborde */
+}
+
+/* Garante que o canvas gerado pelo Three.js preenche o container */
+#threejs-canvas-container canvas {
+  display: block; /* Remove espaço extra abaixo do canvas */
+  width: 100%;
+  height: 100%;
+}
+
+/* Remove a regra antiga do model-viewer, se ainda existir */
+/* model-viewer { ... } */

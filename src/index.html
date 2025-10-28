@@ -2,35 +2,15 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>App Educativo 3D - Fase 1</title>
-</head>
+  <title>App Educativo 3D - Fase 1 (Three.js)</title>
+  </head>
 <body>
-  
+
   <div class="container">
-    
+
     <div class="viewer-column">
-      <model-viewer id="viewer"
-          src="" 
-          environment-image=""
-          camera-controls
-          auto-rotate
-          ar
-          ar-modes="webxr scene-viewer quick-look"
-          shadow-intensity="1">
-          
-          <div slot="hotspot-1" data-position="0 1.5 0.1" data-normal="0 0 1">
-            <button class="delete-btn">X</button>
-            <h3>Cabeça</h3>
-            <p>Este é o capacete do astronauta.</p>
-          </div>
-          
-          <div slot="hotspot-2" data-position="0 0.5 -0.2" data-normal="0 0 -1">
-            <button class="delete-btn">X</button>
-            <h3>Mochila</h3>
-            <p>Contém o suporte de vida.</p>
-          </div>
-          </model-viewer>
-    </div>
+      <div id="threejs-canvas-container"></div>
+      </div>
 
     <div class="controls-column">
       <h2>Controles</h2>
@@ -38,7 +18,7 @@
       <button id="btn-toggle-annotation">Ativar Anotação</button>
       <button id="btn-save-state">Salvar Estado</button>
       <button id="btn-load-state">Carregar Estado</button>
-      
+
       <div id="status-log">
         <p>Status: Aguardando ação...</p>
       </div>
@@ -47,15 +27,12 @@
   </div>
 
   <div id="annotation-modal-backdrop" class="modal-hidden">
-    <div id="annotation-modal">
+     <div id="annotation-modal">
       <h2>Adicionar Anotação</h2>
-      
       <label for="annotation-title">Título:</label>
       <input type="text" id="annotation-title" placeholder="Título da nota...">
-      
       <label for="annotation-text">Texto:</label>
       <textarea id="annotation-text" rows="3" placeholder="Descrição..."></textarea>
-      
       <div class="modal-buttons">
         <button id="modal-btn-cancel">Cancelar</button>
         <button id="modal-btn-save">Salvar</button>
